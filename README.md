@@ -1,2 +1,154 @@
-# stellar-safe-wallet
-A programmable Soroban smart contract wallet with spending limits, whitelisted addresses, daily caps, and recovery keys — Account Abstraction on Stellar.
+# 🔐 Soroban Safe — Account Abstraction Wallet on Stellar
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Stellar](https://img.shields.io/badge/Built%20on-Stellar-blue)](https://stellar.org)
+[![Soroban](https://img.shields.io/badge/Smart%20Contracts-Soroban-purple)](https://soroban.stellar.org)
+[![good first issues](https://img.shields.io/github/issues/ogenyialice120/stellar-safe-wallet/good%20first%20issue)](https://github.com/ogenyialice120/stellar-safe-wallet/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
+
+A programmable smart contract wallet built on **Stellar's Soroban** platform, implementing full **Account Abstraction** logic — going far beyond basic multisig into a flexible, policy-driven wallet engine.
+
+---
+
+## ✨ Features
+
+| Feature | Description |
+|---|---|
+| 💰 **Daily Spending Caps** | Set maximum spend limits per 24-hour rolling window |
+| 📋 **Whitelisted Addresses** | Restrict transfers to pre-approved recipient addresses |
+| ⏱️ **Time-Locked Transactions** | Enforce delays on large transfers for extra security |
+| 🔑 **Recovery Keys** | Designate recovery signers to regain wallet access |
+| 👥 **Multi-Owner Support** | Multiple owners with configurable approval thresholds |
+| 🚦 **Spending Policies** | Programmable rules engine for custom transaction logic |
+| 📊 **Spend History** | On-chain record of transactions per policy period |
+| 🔒 **Emergency Freeze** | Instantly freeze wallet activity via recovery key |
+
+---
+
+## 🏗️ Architecture
+
+```
+stellar-safe-wallet/
+├── contracts/
+│   ├── safe-wallet/          # Core wallet smart contract (Rust/Soroban)
+│   │   ├── src/
+│   │   │   ├── lib.rs        # Contract entry point
+│   │   │   ├── policy.rs     # Spending policy engine
+│   │   │   ├── whitelist.rs  # Address whitelist management
+│   │   │   ├── recovery.rs   # Recovery key logic
+│   │   │   └── types.rs      # Shared types & errors
+│   │   └── Cargo.toml
+│   └── test-utils/           # Shared test utilities
+├── src/
+│   ├── client/               # TypeScript SDK client
+│   └── utils/                # Helper functions
+├── tests/
+│   ├── unit/                 # Unit tests
+│   └── integration/          # Integration tests on Testnet
+├── docs/
+│   ├── architecture.md       # Deep-dive architecture docs
+│   ├── policies.md           # Spending policy guide
+│   └── deployment.md         # Deployment guide
+├── scripts/
+│   └── deploy.sh             # Deployment scripts
+└── README.md
+```
+
+---
+
+## 🚀 Getting Started
+
+### Prerequisites
+
+- [Rust](https://rustup.rs/) (1.74+)
+- [Stellar CLI](https://developers.stellar.org/docs/tools/developer-tools/stellar-cli) (`stellar` v22+)
+- [Node.js](https://nodejs.org/) 18+ (for TypeScript client)
+
+### Installation
+
+```bash
+# Clone the repository
+git clone https://github.com/ogenyialice120/stellar-safe-wallet.git
+cd stellar-safe-wallet
+
+# Install Rust Soroban target
+rustup target add wasm32-unknown-unknown
+
+# Build the smart contract
+cd contracts/safe-wallet
+cargo build --target wasm32-unknown-unknown --release
+```
+
+### Running Tests
+
+```bash
+# Unit tests
+cargo test
+
+# Integration tests (requires Testnet access)
+cargo test --features testnet
+```
+
+### Deploy to Testnet
+
+```bash
+# Configure Stellar CLI for testnet
+stellar network add testnet \
+  --rpc-url https://soroban-testnet.stellar.org \
+  --network-passphrase "Test SDF Network ; September 2015"
+
+# Generate & fund a test account
+stellar keys generate alice --network testnet
+stellar keys fund alice --network testnet
+
+# Deploy the contract
+stellar contract deploy \
+  --wasm target/wasm32-unknown-unknown/release/safe_wallet.wasm \
+  --source alice \
+  --network testnet
+```
+
+---
+
+## 📖 Usage Example
+
+```rust
+// Initialize wallet with owner and daily cap of 100 XLM
+client.initialize(
+    owner_address,
+    daily_cap_xlm: 100_0000000,  // 100 XLM in stroops
+    recovery_key: recovery_address,
+);
+
+// Add a whitelisted recipient
+client.add_whitelist(recipient_address);
+
+// Execute a transfer (enforces all policies automatically)
+client.transfer(recipient_address, amount_in_stroops);
+```
+
+---
+
+## 🤝 Contributing
+
+We welcome contributions! This project participates in the **[Stellar Wave Program](https://www.drips.network/wave/stellar)** — a monthly contribution sprint where you can earn rewards for your work.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for full guidelines.
+
+**Quick start for Wave contributors:**
+1. Browse [open issues](https://github.com/ogenyialice120/stellar-safe-wallet/issues) labeled `good first issue` or `Stellar Wave`
+2. Comment on the issue to apply
+3. Fork → branch → PR
+
+---
+
+## 📄 License
+
+MIT License — see [LICENSE](LICENSE) for details.
+
+---
+
+## 🌊 Stellar Wave Program
+
+This repository is submitted to the **[Stellar Wave Program](https://www.drips.network/wave/stellar)** by Drips Network. Contributors who resolve issues during an active Wave earn Points that translate to real rewards from the Stellar Development Foundation.
+
+**Fix. Merge. Earn. 🌊**
