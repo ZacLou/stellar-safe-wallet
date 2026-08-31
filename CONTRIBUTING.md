@@ -32,7 +32,6 @@ cd stellar-safe-wallet
 rustup target add wasm32-unknown-unknown
 
 # Build contracts
-cd contracts/safe-wallet
 cargo build --target wasm32-unknown-unknown --release
 
 # Run tests
@@ -68,12 +67,6 @@ cargo test
 - Avoid `unwrap()` in contract code — use proper error handling with `Result`
 - Keep contract state minimal; prefer stateless logic where possible
 
-### TypeScript (client/utils)
-
-- Use TypeScript strict mode
-- Run `npm run lint` before committing
-- Prefer `const` over `let`
-
 ---
 
 ## 📝 Commit Conventions
@@ -93,16 +86,12 @@ chore: update dependencies
 
 ## 🧪 Testing Requirements
 
-- **Unit tests**: required for all new contract logic
-- **Integration tests**: required for end-to-end flows (deploy → call → verify)
-- Target: maintain >80% test coverage on contract code
-- Tests live in `tests/unit/` and `tests/integration/`
+- Unit tests required for all new contract logic
+- Integration tests required for end-to-end flows
+- Target: >80% test coverage on contract code
 
 ```bash
-# Run all tests
 cargo test
-
-# Run with output
 cargo test -- --nocapture
 ```
 
@@ -110,33 +99,12 @@ cargo test -- --nocapture
 
 ## 🔍 Pull Request Checklist
 
-Before submitting your PR, confirm:
-
-- [ ] Code builds without errors (`cargo build`)
-- [ ] All tests pass (`cargo test`)
+- [ ] `cargo build` succeeds
+- [ ] `cargo test` passes
 - [ ] `cargo fmt` and `cargo clippy` are clean
 - [ ] New functionality has tests
 - [ ] Doc comments added for public functions
 - [ ] PR description explains what and why
-
----
-
-## 🐛 Reporting Bugs
-
-Open an issue with:
-- Clear description of the bug
-- Steps to reproduce
-- Expected vs actual behavior
-- Relevant contract/function names
-
----
-
-## 💡 Suggesting Features
-
-Open an issue with the `enhancement` label. Describe:
-- The problem it solves
-- Proposed approach
-- Any tradeoffs or alternatives considered
 
 ---
 
