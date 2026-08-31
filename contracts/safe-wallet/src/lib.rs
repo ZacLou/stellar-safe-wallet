@@ -78,6 +78,31 @@ impl SafeWallet {
     }
 
     /// Emergency freeze — callable by recovery key only.
+    /// Remove an address from the whitelist.
+    pub fn remove_whitelist(env: Env, address: Address) -> Result<(), WalletError> {
+        Self::require_owner(&env)?;
+        let list: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Whitelist)
+            .unwrap_or_else(|| Vec::new(&env));
+        let mut new_list = Vec::new(&env);
+        let mut found = false;
+        for i in 0..list.len() {
+            let item = list.get(i).unwrap();
+            if item == address {
+                found = true;
+            } else {
+                new_list.push_back(item);
+            }
+        }
+        if !found {
+            return Err(WalletError::AddressNotWhitelisted);
+        }
+        env.storage().instance().set(&DataKey::Whitelist, &new_list);
+        Ok(())
+    }
+
     pub fn freeze(env: Env, caller: Address) -> Result<(), WalletError> {
         caller.require_auth();
         let recovery_key: Address = env
@@ -130,5 +155,55 @@ mod tests {
         let contract_id = env.register(SafeWallet, ());
         let client = SafeWalletClient::new(&env, &contract_id);
         assert!(!client.is_frozen());
+    }
+
+    #[test]
+    fn test_remove_whitelist_success() {
+        let env = Env::default();
+        let contract_id = env.register(SafeWallet, ());
+        let client = SafeWalletClient::new(&env, &contract_id);
+        let owner = Address::generate(&env);
+        let recovery = Address::generate(&env);
+        let addr1 = Address::generate(&env);
+        let addr2 = Address::generate(&env);
+        client.initialize(&owner, &1000, &recovery);
+        client.add_whitelist(&addr1);
+        client.add_whitelist(&addr2);
+        client.remove_whitelist(&addr1);
+        // Second removal should fail since addr1 is no longer whitelisted.
+        assert_eq!(
+            client.try_remove_whitelist(&addr1),
+            Err(Ok(WalletError::AddressNotWhitelisted))
+        );
+    }
+
+    #[test]
+    fn test_remove_whitelist_missing_address() {
+        let env = Env::default();
+        let contract_id = env.register(SafeWallet, ());
+        let client = SafeWalletClient::new(&env, &contract_id);
+        let owner = Address::generate(&env);
+        let recovery = Address::generate(&env);
+        let addr = Address::generate(&env);
+        client.initialize(&owner, &1000, &recovery);
+        assert_eq!(
+            client.try_remove_whitelist(&addr),
+            Err(Ok(WalletError::AddressNotWhitelisted))
+        );
+    }
+
+    #[test]
+    fn test_remove_whitelist_unauthorized() {
+        let env = Env::default();
+        let contract_id = env.register(SafeWallet, ());
+        let client = SafeWalletClient::new(&env, &contract_id);
+        let owner = Address::generate(&env);
+        let recovery = Address::generate(&env);
+        let addr = Address::generate(&env);
+        let attacker = Address::generate(&env);
+        client.initialize(&owner, &1000, &recovery);
+        client.add_whitelist(&addr);
+        // Attacker should not be able to remove from whitelist.
+        assert!(client.try_remove_whitelist(&addr).is_err());
     }
 }
