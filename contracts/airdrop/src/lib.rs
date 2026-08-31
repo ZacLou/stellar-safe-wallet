@@ -1,10 +1,11 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short,
+    contract, contracterror, contractimpl, contracttype, symbol_short,
     token, vec,
     Address, BytesN, Env, Map, Vec,
 };
+use soroban_sdk::xdr::ToXdr;
 
 // ---------------------------------------------------------------------------
 // Storage keys
@@ -27,7 +28,7 @@ pub enum DataKey {
 // Errors
 // ---------------------------------------------------------------------------
 
-#[contracttype]
+#[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
 pub enum AirdropError {
@@ -191,6 +192,7 @@ impl AirdropContract {
         }
 
         env.crypto().sha256(&data)
+            .into()
     }
 
     /// Verify a Merkle inclusion proof.
@@ -219,7 +221,7 @@ impl AirdropContract {
                 combined.append(&Bytes::from(current.clone()));
             }
 
-            current = env.crypto().sha256(&combined);
+            current = env.crypto().sha256(&combined).into();
         }
 
         current == root
@@ -252,5 +254,127 @@ mod tests {
         let client = AirdropContractClient::new(&env, &contract_id);
 
         assert!(client.merkle_root().is_none());
+    }
+
+    #[test]
+    fn test_claim_happy_path() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register(AirdropContract, ());
+        let client = AirdropContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let claimant = Address::generate(&env);
+        let amount: i128 = 100;
+
+        // Set up a test token and fund the airdrop contract.
+        let token_admin = Address::generate(&env);
+        let token_address = env.register_stellar_asset_contract(token_admin.clone());
+        let token_client = token::Client::new(&env, &token_address);
+        let token_admin_client = token::StellarAssetClient::new(&env, &token_address);
+        token_admin_client.mint(&contract_id, &1000);
+
+        // Build a single-leaf Merkle tree: root == leaf, proof is empty.
+        let leaf = compute_leaf_for_test(&env, &claimant, amount);
+        let merkle_root = leaf.clone();
+
+        client.initialize(&admin, &token_address, &merkle_root);
+
+        let proof = Vec::new(&env);
+        client.claim(&claimant, &amount, &proof);
+
+        assert!(client.is_claimed(&claimant));
+        assert_eq!(token_client.balance(&claimant), amount);
+        assert_eq!(token_client.balance(&contract_id), 1000 - amount);
+    }
+
+    #[test]
+    fn test_claim_already_claimed() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register(AirdropContract, ());
+        let client = AirdropContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let claimant = Address::generate(&env);
+        let amount: i128 = 100;
+
+        let token_admin = Address::generate(&env);
+        let token_address = env.register_stellar_asset_contract(token_admin.clone());
+        let token_admin_client = token::StellarAssetClient::new(&env, &token_address);
+        token_admin_client.mint(&contract_id, &1000);
+
+        let leaf = compute_leaf_for_test(&env, &claimant, amount);
+        client.initialize(&admin, &token_address, &leaf);
+
+        let proof = Vec::new(&env);
+        client.claim(&claimant, &amount, &proof);
+        let second = client.try_claim(&claimant, &amount, &proof);
+        assert_eq!(second, Err(Ok(AirdropError::AlreadyClaimed)));
+    }
+
+    #[test]
+    fn test_claim_invalid_proof() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register(AirdropContract, ());
+        let client = AirdropContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let claimant = Address::generate(&env);
+        let amount: i128 = 100;
+
+        let token_admin = Address::generate(&env);
+        let token_address = env.register_stellar_asset_contract(token_admin.clone());
+        let token_admin_client = token::StellarAssetClient::new(&env, &token_address);
+        token_admin_client.mint(&contract_id, &1000);
+
+        // Use a random root that does not match the claimant leaf.
+        let bad_root = BytesN::from_array(&env, &[42u8; 32]);
+        client.initialize(&admin, &token_address, &bad_root);
+
+        let proof = Vec::new(&env);
+        let result = client.try_claim(&claimant, &amount, &proof);
+        assert_eq!(result, Err(Ok(AirdropError::InvalidProof)));
+    }
+
+    #[test]
+    fn test_claim_is_claimed_after_success() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register(AirdropContract, ());
+        let client = AirdropContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let claimant = Address::generate(&env);
+        let amount: i128 = 100;
+
+        let token_admin = Address::generate(&env);
+        let token_address = env.register_stellar_asset_contract(token_admin.clone());
+        let token_admin_client = token::StellarAssetClient::new(&env, &token_address);
+        token_admin_client.mint(&contract_id, &1000);
+
+        let leaf = compute_leaf_for_test(&env, &claimant, amount);
+        client.initialize(&admin, &token_address, &leaf);
+
+        assert!(!client.is_claimed(&claimant));
+        let proof = Vec::new(&env);
+        client.claim(&claimant, &amount, &proof);
+        assert!(client.is_claimed(&claimant));
+    }
+
+    /// Replicate the contract's leaf hashing so tests can build valid Merkle roots.
+    fn compute_leaf_for_test(env: &Env, claimant: &Address, amount: i128) -> BytesN<32> {
+        use soroban_sdk::Bytes;
+        let mut data = Bytes::new(env);
+        data.append(&claimant.to_xdr(env));
+        for byte in amount.to_le_bytes() {
+            data.push_back(byte);
+        }
+        env.crypto().sha256(&data).into()
     }
 }
