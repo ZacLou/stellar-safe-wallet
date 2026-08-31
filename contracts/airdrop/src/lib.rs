@@ -1,7 +1,7 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short,
+    contract, contracterror, contractimpl, contracttype, symbol_short,
     token, vec,
     Address, BytesN, Env, Map, Vec,
 };
@@ -27,8 +27,8 @@ pub enum DataKey {
 // Errors
 // ---------------------------------------------------------------------------
 
-#[contracttype]
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[contracterror]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum AirdropError {
     /// Caller is not the contract admin

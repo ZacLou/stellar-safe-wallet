@@ -1,7 +1,7 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype,
+    contract, contracterror, contractimpl, contracttype,
     Address, Env, Vec,
 };
 
@@ -25,8 +25,8 @@ pub enum DataKey {
 // Errors
 // ---------------------------------------------------------------------------
 
-#[contracttype]
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[contracterror]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum WalletError {
     Unauthorized = 1,
