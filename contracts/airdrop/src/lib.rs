@@ -90,7 +90,7 @@ impl AirdropContract {
         env: Env,
         claimant: Address,
         amount: i128,
-        proof: Vec<BytesN<32>>,   // line ~85: full generic type Vec<BytesN<32>>
+        proof: Vec<BytesN<32>>,
     ) -> Result<(), AirdropError> {
         claimant.require_auth();
 
@@ -111,8 +111,7 @@ impl AirdropContract {
 
         // Retrieve stored Merkle root
         let merkle_root: BytesN<32> = env
-            .storage()
-            .instance()
+            .storage().instance()
             .get(&DataKey::MerkleRoot)
             .ok_or(AirdropError::NotInitialised)?;
 
@@ -120,8 +119,7 @@ impl AirdropContract {
         let leaf = Self::compute_leaf(&env, &claimant, amount);
 
         // Verify Merkle proof
-        // proof_vec is explicitly typed as Vec<BytesN<32>> for clarity
-        let proof_vec: Vec<BytesN<32>> = proof;  // line ~120: properly typed Vec<BytesN<32>>
+        let proof_vec: Vec<BytesN<32>> = proof;
         if !Self::verify_proof(&env, leaf, proof_vec, merkle_root) {
             return Err(AirdropError::InvalidProof);
         }
@@ -133,8 +131,7 @@ impl AirdropContract {
 
         // Transfer tokens to claimant
         let token_address: Address = env
-            .storage()
-            .instance()
+            .storage().instance()
             .get(&DataKey::TokenAddress)
             .ok_or(AirdropError::NotInitialised)?;
 
@@ -207,18 +204,20 @@ impl AirdropContract {
     ) -> bool {
         use soroban_sdk::Bytes;
 
-        let mut current = leaf;
+        let mut current: BytesN<32> = leaf;
 
         for sibling in proof.iter() {
             let mut combined = Bytes::new(env);
+            let sibling_bytes: Bytes = sibling.clone().into();
+            let current_bytes: Bytes = current.clone().into();
 
             // Lexicographic ordering ensures deterministic tree construction
             if current.as_ref() <= sibling.as_ref() {
-                combined.append(&Bytes::from(current.clone()));
-                combined.append(&Bytes::from(sibling.clone()));
+                combined.append(&current_bytes);
+                combined.append(&sibling_bytes);
             } else {
-                combined.append(&Bytes::from(sibling.clone()));
-                combined.append(&Bytes::from(current.clone()));
+                combined.append(&sibling_bytes);
+                combined.append(&current_bytes);
             }
 
             current = env.crypto().sha256(&combined).into();
