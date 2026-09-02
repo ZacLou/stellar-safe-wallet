@@ -1,204 +1,192 @@
 # Spending Policies
 
-This guide explains how Soroban Safe enforces spending policies on Stellar. It is intended for wallet owners, integrators, and contributors who want to understand the policy engine without reading the contract source.
+This guide explains how Soroban Safe's spending policies work and how to configure them. The policies are enforced by the `SafeWallet` contract in `contracts/safe-wallet`.
+
+---
 
 ## Overview
 
-Soroban Safe uses a small set of on-chain policy controls that are evaluated on every transfer:
+A SafeWallet is governed by four interlocking policies:
 
-| Policy | Purpose |
-|---|---|
-| **Daily cap** | Limit total outflows in a rolling 24-hour window |
-| **Whitelist** | Restrict transfers to approved recipient addresses |
-| **Freeze/unfreeze** | Halt all outflows in an emergency |
-| **Recovery key** | A separate key that can freeze the wallet if the owner key is compromised |
+| Policy | Purpose | Controlled By |
+|---|---|---|
+| **Daily cap** | Limit total outflows in any 24-hour window | Owner |
+| **Whitelist** | Restrict transfers to approved recipient addresses | Owner |
+| **Freeze/unfreeze** | Emergency circuit breaker for the wallet | Recovery key |
+| **Recovery key** | Trust-minimized safety net that can freeze — but not spend from — the wallet | Set at initialization |
 
-These policies are stored in the wallet's instance storage and are checked by the `transfer` entrypoint before any token movement.
+All policy state lives in Soroban instance storage. Only the `Owner` can change the daily cap or whitelist. The `RecoveryKey` can only toggle the freeze flag.
 
 ---
 
 ## Daily Cap
 
-The daily cap is the maximum amount the wallet can transfer within a rolling 24-hour window. It is set during `initialize` and is denominated in **stroops** (1 XLM = 10,000,000 stroops).
+The daily cap limits how much value can leave the wallet in a rolling 24-hour window. It is stored as an `i128` value in **stroops** (1 XLM = 10,000,000 stroops).
 
 ### How it works
 
-1. Each wallet stores `DailyCap`, `SpentToday`, and `LastResetTimestamp`.
-2. Before a transfer, the contract checks whether the current ledger timestamp has moved past `LastResetTimestamp + 24 hours`.
-3. If the window has rolled over, `SpentToday` is reset to `0` and `LastResetTimestamp` is updated.
-4. The requested amount is added to `SpentToday` and compared against `DailyCap`.
-5. If the new total would exceed the cap, the transfer returns `WalletError::DailyCapExceeded`.
+1. `DailyCap` is set when the wallet is initialized.
+2. Every time a transfer is initiated, the contract checks the current ledger timestamp against `LastResetTimestamp`.
+3. If more than 24 hours have passed, `SpentToday` is reset to `0` and `LastResetTimestamp` is updated to the current timestamp.
+4. The requested amount is added to `SpentToday`. If the total exceeds `DailyCap`, the transfer fails with `DailyCapExceeded`.
 
-### Example
+This creates a **rolling 24-hour window**: the cap is enforced over the most recent 24 hours of ledger time, not per calendar day.
+
+### Example: initialize a wallet with a 100 XLM daily cap
+
+Using the Soroban CLI:
 
 ```bash
-# Initialize a wallet with a 100 XLM daily cap
-stellar contract invoke \
-  --id <CONTRACT_ID> \
-  --source owner \
+soroban contract invoke \
+  --id <SAFE_WALLET_CONTRACT_ID> \
+  --source-account <OWNER_SECRET_KEY> \
   --network testnet \
   -- \
   initialize \
   --owner <OWNER_ADDRESS> \
-  --daily_cap 1000000000 \
-  --recovery_key <RECOVERY_ADDRESS>
+  --daily-cap 1000000000 \
+  --recovery-key <RECOVERY_ADDRESS>
 ```
 
-```rust
-// Rust SDK example
-use soroban_sdk::{Address, Env};
-
-let client = SafeWalletClient::new(&env, &contract_id);
-client.initialize(
-    &owner_address,      // Address
-    &100_000_0000i128,   // 100 XLM daily cap in stroops
-    &recovery_address,    // Address
-);
-```
+The `daily-cap` value is in stroops, so `1000000000` equals 100 XLM.
 
 ---
 
 ## Whitelist
 
-The whitelist is a list of `Address` values that are allowed to receive transfers. If the wallet is initialized with a non-empty whitelist (or one is added later), every `transfer` recipient must be present in the list.
+The whitelist restricts outgoing transfers to a known set of recipient addresses. A transfer to any address not on the list fails with `AddressNotWhitelisted`.
 
-### Managing the whitelist
+### How it works
 
-Only the wallet owner can add or remove addresses.
+1. The whitelist is stored as a `Vec<Address>` in instance storage.
+2. The owner can add addresses at any time with `add_whitelist`.
+3. Before executing a transfer, the contract verifies `to ∈ whitelist`.
+4. There is no on-chain limit to the number of whitelisted addresses, but each addition increases storage cost.
+
+> **Note:** The current contract exposes `add_whitelist`. Removing an address and performing transfers are handled in the same storage layer and follow the same owner-authorization rules.
+
+### Example: add a recipient to the whitelist
+
+Using the Soroban CLI:
 
 ```bash
-# Add a recipient to the whitelist
-stellar contract invoke \
-  --id <CONTRACT_ID> \
-  --source owner \
+soroban contract invoke \
+  --id <SAFE_WALLET_CONTRACT_ID> \
+  --source-account <OWNER_SECRET_KEY> \
   --network testnet \
   -- \
   add_whitelist \
   --address <RECIPIENT_ADDRESS>
 ```
 
-```rust
-// Rust SDK example
-client.add_whitelist(&recipient_address);
-```
-
-A transfer to an address that is not on the whitelist returns `WalletError::AddressNotWhitelisted`.
-
-### When to use the whitelist
-
-- Restrict payroll or treasury outflows to known counter-parties.
-- Reduce blast radius if the owner key is used without approval.
-- Enforce vendor lists in multi-user organizations.
+After this transaction confirms, `<RECIPIENT_ADDRESS>` can receive transfers from the wallet. Attempts to transfer to any other address will revert with `AddressNotWhitelisted`.
 
 ---
 
 ## Freeze and Unfreeze
 
-The wallet can be frozen by the recovery key. While frozen, all transfers are rejected with `WalletError::WalletFrozen`. The owner can still read state, but no outflows are possible.
+The freeze flag is an emergency circuit breaker. When `Frozen` is `true`, all transfers are blocked until the wallet is unfrozen.
 
-### Freeze flow
+### When to use it
 
-1. The recovery key calls `freeze(caller)`.
-2. The contract verifies that `caller == RecoveryKey`.
-3. `Frozen` is set to `true`.
+- **Compromised owner key:** If you suspect the owner's signing key is exposed, freeze the wallet immediately to stop outflows.
+- **Suspicious activity:** If you see unauthorized whitelist additions or transfer attempts, freeze first and investigate.
+- **Upgrade or migration:** Freeze the wallet before a sensitive contract upgrade or ownership transfer.
+
+### How it works
+
+1. `Frozen` defaults to `false` at initialization.
+2. Only the address stored in `RecoveryKey` can call `freeze`.
+3. Calling `freeze` sets `Frozen` to `true`.
+4. The recovery key (or owner, depending on implementation) can later call `unfreeze` to restore normal operation.
+5. While frozen, any transfer attempt fails with `WalletFrozen`.
+
+The recovery key is intentionally **not** authorized to spend or change policies. Its only power is to halt and resume operations, providing a separation-of-duties safety net.
+
+### Example: freeze the wallet in an emergency
+
+Using the Soroban CLI:
 
 ```bash
-# Freeze the wallet from the recovery key
-stellar contract invoke \
-  --id <CONTRACT_ID> \
-  --source recovery \
+soroban contract invoke \
+  --id <SAFE_WALLET_CONTRACT_ID> \
+  --source-account <RECOVERY_SECRET_KEY> \
   --network testnet \
   -- \
   freeze \
   --caller <RECOVERY_ADDRESS>
 ```
 
-```rust
-// Rust SDK example
-client.freeze(&recovery_address);
-```
-
-### Unfreeze
-
-Unfreezing is an owner-only operation. The owner calls `unfreeze()` to set `Frozen` back to `false` and resume normal transfers.
+To check the current freeze status:
 
 ```bash
-# Unfreeze the wallet (owner only)
-stellar contract invoke \
-  --id <CONTRACT_ID> \
-  --source owner \
+soroban contract invoke \
+  --id <SAFE_WALLET_CONTRACT_ID> \
   --network testnet \
   -- \
-  unfreeze
+  is_frozen
 ```
 
-```rust
-// Rust SDK example
-client.unfreeze();
-```
-
-### When to freeze
-
-- The owner key is suspected to be compromised.
-- Unusual spending patterns are detected off-chain.
-- A security incident requires an immediate circuit breaker.
+A response of `true` means all transfers are currently blocked.
 
 ---
 
 ## Recovery Key
 
-The recovery key is a separate `Address` set during `initialize`. It has only one power: **freezing the wallet**. It cannot transfer funds, change the daily cap, or modify the whitelist.
+The recovery key is a secondary address set during initialization. It exists to reduce the blast radius of a lost or compromised owner key.
 
 ### Responsibilities
 
-- Store the recovery key in a different location or with a different custodian than the owner key.
-- Use it only in emergencies.
-- After freezing, coordinate with the owner to rotate keys or investigate before unfreezing.
+- **Can freeze** the wallet at any time.
+- **Cannot spend** from the wallet.
+- **Cannot change** the daily cap, whitelist, or owner.
+- **Cannot unfreeze** the wallet unless the implementation also grants that permission (default design: recovery key toggles freeze).
 
-### Why a separate key?
+### Best practices
 
-If the owner and recovery keys were the same, a compromised owner key could both steal funds and prevent anyone from stopping the theft. Splitting the roles means an attacker who owns the owner key still cannot prevent the recovery key from freezing the wallet.
+- Store the recovery key in a different hardware wallet or custodian than the owner key.
+- Practice the freeze flow on testnet before mainnet deployment.
+- Do **not** make the recovery key a hot wallet or a shared multi-sig with the owner; the value comes from separation.
+
+### Example: initialize with a recovery key
+
+```bash
+soroban contract invoke \
+  --id <SAFE_WALLET_CONTRACT_ID> \
+  --source-account <OWNER_SECRET_KEY> \
+  --network testnet \
+  -- \
+  initialize \
+  --owner <OWNER_ADDRESS> \
+  --daily-cap 1000000000 \
+  --recovery-key <RECOVERY_ADDRESS>
+```
+
+Choose `<RECOVERY_ADDRESS>` as an address you can access quickly in an emergency but do not use for routine operations.
 
 ---
 
-## Transfer Enforcement Summary
+## Policy Interaction
 
-The following checks are applied in order on every `transfer`:
+The policies combine in the following order during a transfer:
 
-1. **Owner authorization** — `owner.require_auth()`.
-2. **Frozen state** — reject if `Frozen == true`.
-3. **Whitelist** — reject if a whitelist exists and the recipient is not on it.
-4. **Daily window reset** — roll `SpentToday` forward if 24 hours have passed.
-5. **Daily cap** — reject if `SpentToday + amount > DailyCap`.
-6. **Execute transfer** — move tokens to the recipient and increment `SpentToday`.
-
-```text
+```
 transfer(to, amount)
+  │
   ├─ require owner auth
-  ├─ check !frozen
-  ├─ check to ∈ whitelist (if whitelist is set)
-  ├─ maybe reset daily window
-  ├─ check spent + amount ≤ daily_cap
+  ├─ check !frozen                       ← recovery key / freeze policy
+  ├─ check to ∈ whitelist                ← whitelist policy
+  ├─ maybe reset daily window            ← daily cap rolling window
+  ├─ check spent + amount ≤ daily_cap    ← daily cap policy
   └─ execute token transfer
 ```
 
----
-
-## Error Reference
-
-| Error | Cause |
-|---|---|
-| `Unauthorized` | Caller is not the owner or recovery key for the requested operation. |
-| `DailyCapExceeded` | Transfer would exceed the rolling 24-hour cap. |
-| `AddressNotWhitelisted` | Recipient is not in the whitelist. |
-| `WalletFrozen` | Wallet is frozen and no transfers are allowed. |
-| `ZeroAmount` | Transfer amount is zero or negative. |
-| `NotInitialised` | Wallet storage has not been initialized yet. |
+A transfer must satisfy **every** check. Failing any single check reverts the entire transaction, keeping the wallet state unchanged.
 
 ---
 
 ## See Also
 
 - [`architecture.md`](architecture.md) — contract layout and storage keys
-- [`deployment.md`](deployment.md) — how to deploy the wallet to Testnet/Mainnet
-- [`CONTRIBUTING.md`](../CONTRIBUTING.md) — contribution guidelines
+- [`deployment.md`](deployment.md) — how to deploy and upgrade SafeWallet
+- `contracts/safe-wallet/src/lib.rs` — contract source code
