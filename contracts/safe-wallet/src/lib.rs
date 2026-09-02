@@ -157,6 +157,29 @@ impl SafeWallet {
         Ok(())
     }
 
+    /// Emergency freeze — callable by the recovery key only.
+    pub fn freeze(env: Env, caller: Address) -> Result<(), WalletError> {
+        caller.require_auth();
+        let recovery_key: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::RecoveryKey)
+            .ok_or(WalletError::NotInitialised)?;
+        if caller != recovery_key {
+            return Err(WalletError::Unauthorized);
+        }
+        env.storage().instance().set(&DataKey::Frozen, &true);
+        Ok(())
+    }
+
+    /// Returns `true` if the wallet is frozen.
+    pub fn is_frozen(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::Frozen)
+            .unwrap_or(false)
+    }
+
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
@@ -169,17 +192,6 @@ impl SafeWallet {
             .ok_or(WalletError::NotInitialised)?;
         owner.require_auth();
         Ok(owner)
-    }
-
-    fn vec_contains(list: &Vec<Address>, target: &Address) -> bool {
-        for i in 0..list.len() {
-            if let Some(item) = list.get(i) {
-                if &item == target {
-                    return true;
-                }
-            }
-        }
-        false
     }
 }
 
