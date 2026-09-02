@@ -4,9 +4,6 @@ use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype,
     token, Address, Env, Vec,
 };
-use soroban_sdk::token;
-// Re-export contracterror so the generated client can decode errors.
-pub use soroban_sdk::contracterror;
 
 // ---------------------------------------------------------------------------
 // Storage keys
@@ -86,95 +83,6 @@ impl SafeWallet {
         list.push_back(address);
         env.storage().instance().set(&DataKey::Whitelist, &list);
         Ok(())
-    }
-
-    /// Transfer tokens to a whitelisted address, enforcing owner auth,
-    /// wallet freeze state, and daily spending cap.
-    pub fn transfer(env: Env, to: Address, amount: i128) -> Result<(), WalletError> {
-        Self::require_owner(&env)?;
-
-        if Self::is_frozen(env.clone()) {
-            return Err(WalletError::WalletFrozen);
-        }
-
-        if amount <= 0 {
-            return Err(WalletError::ZeroAmount);
-        }
-
-        // Ensure `to` is in the whitelist.
-        let list: Vec<Address> = env
-            .storage()
-            .instance()
-            .get(&DataKey::Whitelist)
-            .unwrap_or_else(|| Vec::new(&env));
-        if !Self::vec_contains(&list, &to) {
-            return Err(WalletError::AddressNotWhitelisted);
-        }
-
-        // Reset daily spend counter if the 24h window has elapsed.
-        let now = env.ledger().timestamp();
-        let last_reset: u64 = env
-            .storage()
-            .instance()
-            .get(&DataKey::LastResetTimestamp)
-            .unwrap_or(now);
-        let spent_today: i128 = if now >= last_reset + 86_400 {
-            env.storage().instance().set(&DataKey::LastResetTimestamp, &now);
-            0_i128
-        } else {
-            env.storage()
-                .instance()
-                .get(&DataKey::SpentToday)
-                .unwrap_or(0_i128)
-        };
-
-        let daily_cap: i128 = env
-            .storage()
-            .instance()
-            .get(&DataKey::DailyCap)
-            .ok_or(WalletError::NotInitialised)?;
-        if spent_today + amount > daily_cap {
-            return Err(WalletError::DailyCapExceeded);
-        }
-
-        // Execute the token transfer.
-        let token_address: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::TokenAddress)
-            .ok_or(WalletError::NotInitialised)?;
-        let token_client = token::Client::new(&env, &token_address);
-        token_client.transfer(&env.current_contract_address(), &to, &amount);
-
-        // Record spend.
-        env.storage()
-            .instance()
-            .set(&DataKey::SpentToday, &(spent_today + amount));
-
-        Ok(())
-    }
-
-    /// Emergency freeze — callable by recovery key only.
-    pub fn freeze(env: Env, caller: Address) -> Result<(), WalletError> {
-        caller.require_auth();
-        let recovery_key: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::RecoveryKey)
-            .ok_or(WalletError::NotInitialised)?;
-        if caller != recovery_key {
-            return Err(WalletError::Unauthorized);
-        }
-        env.storage().instance().set(&DataKey::Frozen, &true);
-        Ok(())
-    }
-
-    /// Returns `true` if the wallet is frozen.
-    pub fn is_frozen(env: Env) -> bool {
-        env.storage()
-            .instance()
-            .get(&DataKey::Frozen)
-            .unwrap_or(false)
     }
 
     /// Transfer `amount` of `token` to `to`, enforcing wallet policies.
